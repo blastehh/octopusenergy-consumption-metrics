@@ -59,8 +59,12 @@ const boot = async (callback) => {
             let options = {auth: {
                 username: OCTO_API_KEY
             }}
-            electricresponse = await axios.get(`https://api.octopus.energy/v1/electricity-meter-points/${OCTO_ELECTRIC_MPAN}/meters/${OCTO_ELECTRIC_SN}/consumption?page_size=${PAGE_SIZE}`, options)
-            gasresponse = await axios.get(`https://api.octopus.energy/v1/gas-meter-points/${OCTO_GAS_MPRN}/meters/${OCTO_GAS_SN}/consumption?page_size=${PAGE_SIZE}`, options)
+            if (OCTO_ELECTRIC_MPAN) {
+		    electricresponse = await axios.get(`https://api.octopus.energy/v1/electricity-meter-points/${OCTO_ELECTRIC_MPAN}/meters/${OCTO_ELECTRIC_SN}/consumption?page_size=${PAGE_SIZE}`, options)
+	    }
+            if (OCTO_GAS_MPRN) {
+		    gasresponse = await axios.get(`https://api.octopus.energy/v1/gas-meter-points/${OCTO_GAS_MPRN}/meters/${OCTO_GAS_SN}/consumption?page_size=${PAGE_SIZE}`, options)
+	    }
 
             
         } catch(e){
@@ -69,46 +73,56 @@ const boot = async (callback) => {
         }
 
         // Now we loop over every result given to us from the API and feed that into influxdb
+        if (electricresponse && electricresponse.status === 200) {
+            for await ( obj of electricresponse.data.results) {
+                // Here we take the end interval, and convert it into nanoseconds for influxdb as nodejs works with ms, not ns
+                const ts = new Date(obj.interval_end)
+                const nanoDate = toNanoDate(String(ts.valueOf()) + '000000')
+                
+                // work out the consumption and hard set the datapoint's timestamp to the interval_end value from the API
+                let electricpoint = new Point('electricity')
+                    .floatField('consumption', Number(obj.consumption))
+                    .timestamp(nanoDate)
+                
+		    
+                if (OCTO_ELECTRIC_COST) {  
+		    // Same again but for cost mathmatics
+		    let electriccost = Number(obj.consumption) * Number(OCTO_ELECTRIC_COST) / 100
 
-        for await ( obj of electricresponse.data.results) {
-            // Here we take the end interval, and convert it into nanoseconds for influxdb as nodejs works with ms, not ns
-            const ts = new Date(obj.interval_end)
-            const nanoDate = toNanoDate(String(ts.valueOf()) + '000000')
-            
-            // work out the consumption and hard set the datapoint's timestamp to the interval_end value from the API
-            let electricpoint = new Point('electricity')
-                .floatField('consumption', Number(obj.consumption))
-                .timestamp(nanoDate)
-            
-            // Same again but for cost mathmatics
-            let electriccost = Number(obj.consumption) * Number(OCTO_ELECTRIC_COST) / 100
-            let electriccostpoint = new Point('electricity_cost')
-                .floatField('price', electriccost)
-                .timestamp(nanoDate)
+                    let electriccostpoint = new Point('electricity_cost')
+                    .floatField('price', electriccost)
+                    .timestamp(nanoDate)
 
-            // and then write the points:
-            writeApi.writePoint(electricpoint)
-            writeApi.writePoint(electriccostpoint)
+                    writeApi.writePoint(electriccostpoint)
+                }
+
+                // and then write the points:
+                writeApi.writePoint(electricpoint)
+            }
         }
 
-        // Repeat the above but for gas
-        for await (obj of gasresponse.data.results) {
-            const ts = new Date(obj.interval_end)
-            const nanoDate = toNanoDate(String(ts.valueOf()) + '000000')
+        if (gasresponse && gasresponse.status === 200) {
+            // Repeat the above but for gas
+            for await (obj of gasresponse.data.results) {
+                const ts = new Date(obj.interval_end)
+                const nanoDate = toNanoDate(String(ts.valueOf()) + '000000')
+    
+                let gaspoint = new Point('gas')
+                    .floatField('consumption', Number(obj.consumption))
+                    .timestamp(nanoDate)
 
-            let gaspoint = new Point('gas')
-                .floatField('consumption', Number(obj.consumption))
-                .timestamp(nanoDate)
-            
-            let gascost = Number(obj.consumption) * Number(OCTO_GAS_COST) / 100
-
-            let gascostpoint = new Point('gas_cost')
-                .floatField('price', gascost)
-                .timestamp(nanoDate)
-
-            writeApi.writePoint(gaspoint)
-            writeApi.writePoint(gascostpoint)
-
+                if (OCTO_GAS_COST) {
+                    let gascost = Number(obj.consumption) * Number(OCTO_GAS_COST) / 100
+    
+                    let gascostpoint = new Point('gas_cost')
+                        .floatField('price', gascost)
+                        .timestamp(nanoDate)
+    
+                    writeApi.writePoint(gascostpoint)
+		}
+                writeApi.writePoint(gaspoint)
+    
+            }
         }
 
         await writeApi

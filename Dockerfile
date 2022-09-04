@@ -1,4 +1,4 @@
-FROM node:14-buster-slim
+FROM node:alpine3.16
 WORKDIR /usr/src/app
 COPY . .
 RUN npm install
